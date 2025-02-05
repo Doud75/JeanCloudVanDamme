@@ -1,0 +1,102 @@
+name: Frontend CI/CD
+
+on:
+  push:
+    branches: [feat/ci-front-le-retour, main]
+    paths:
+      - 'frontend/**'
+      - 'docker-compose.yml'
+      - 'Dockerfile.frontend'
+      - '.github/workflows/frontend-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # Configuration AWS
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-3
+
+      # Configuration Terraform et récupération des outputs
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+
+      - name: Terraform Init and Apply
+        working-directory: terraform
+        run: |
+          # Initialisation de Terraform
+          echo "🔄 Initializing Terraform..."
+          terraform init
+          
+          # Application de la configuration
+          echo "🚀 Applying Terraform configuration..."
+          terraform apply -auto-approve
+          
+          # Récupération des outputs avec nettoyage
+          CLOUDFRONT_ID=$(terraform output -raw cloudfront_distribution_id 2>/dev/null | sed 's/^\[command\].*output -raw cloudfront_distribution_id//g' | tr -d '\n' | tr -d '\r')
+          CLOUDFRONT_DOMAIN=$(terraform output -raw cloudfront_domain_name 2>/dev/null | sed 's/^\[command\].*output -raw cloudfront_domain_name//g' | tr -d '\n' | tr -d '\r')
+          S3_BUCKET=$(terraform output -raw frontend_bucket_name 2>/dev/null | sed 's/^\[command\].*output -raw frontend_bucket_name//g' | tr -d '\n' | tr -d '\r')
+          
+          # Sauvegarde dans les variables d'environnement
+          echo "CLOUDFRONT_ID=${CLOUDFRONT_ID}" >> $GITHUB_ENV
+          echo "CLOUDFRONT_DOMAIN=${CLOUDFRONT_DOMAIN}" >> $GITHUB_ENV
+          echo "S3_BUCKET=${S3_BUCKET}" >> $GITHUB_ENV
+
+      # Build du frontend
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+          cache-dependency-path: './frontend/package-lock.json'
+
+      - name: Build Frontend
+        working-directory: frontend
+        run: |
+          npm install
+          npm run build --configuration=production
+
+      # Déploiement sur S3 et invalidation CloudFront
+      - name: Deploy to S3
+        run: |
+          aws s3 sync frontend/dist/frontend/browser s3://${{ secrets.FRONTEND_S3_BUCKET }} \
+            --delete \
+            --cache-control "max-age=31536000,public" \
+            --exclude "index.html" \
+            --exclude "*.json"
+          
+          aws s3 sync frontend/dist/frontend/browser s3://${{ secrets.FRONTEND_S3_BUCKET }} \
+            --delete \
+            --cache-control "no-cache,no-store,must-revalidate" \
+            --include "index.html" \
+            --include "*.json"
+
+      - name: Invalidate CloudFront Cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ env.CLOUDFRONT_ID }} \
+            --paths "/*"
+
+      # - name: Verify Deployment
+      #   run: |
+      #     sleep 30  # Attente de la propagation CloudFront
+      #     curl --retry 3 --retry-delay 5 -f https://${{ env.CLOUDFRONT_DOMAIN }}/ || exit 1

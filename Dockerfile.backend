@@ -1,0 +1,32 @@
+# Use an official Python runtime as a base image
+FROM python:3.11
+
+# Set the working directory
+WORKDIR /app
+
+# Copy the Django backend code into the container
+COPY edufinder/ /app/
+
+# Install PostgreSQL client library and dependencies
+RUN apt-get update && apt-get install -y libpq-dev
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Set environment variable to run Django in production mode (optional)
+ENV DJANGO_ENV=production
+
+RUN python -c "import os; \
+               os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'edufinder.settings'); \
+               import django; \
+               django.setup(); \
+               from django.conf import settings; \
+               print(settings.DATABASES)"
+
+# Make migrations and migrate the database
+# RUN python /app/manage.py makemigrations
+# RUN python /app/manage.py migrate
+
+# Start Django's development server and the MQTT server (runmqtt) in the background
+CMD ["bash", "-c", "python /app/manage.py migrate && python /app/manage.py clone_db && python /app/manage.py runserver 0.0.0.0:8000"]
+
+# Expose the Django development server port
+EXPOSE 8000

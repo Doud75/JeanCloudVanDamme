@@ -1,0 +1,25 @@
+# Use the official Node.js image as a base image
+FROM node:20
+
+# Set the working directory
+WORKDIR /app
+
+# Copy package.json and package-lock.json to the working directory
+COPY frontend/package.json frontend/package-lock.json /app/
+
+# Clear npm cache and install dependencies
+RUN npm cache clean --force
+RUN npm install -g npm@latest
+RUN npm install --legacy-peer-deps
+
+# Install Angular CLI version 17
+RUN npm install -g @angular/cli@18
+
+# Copy the entire project directory to the working directory
+COPY frontend/ /app/
+
+# Expose the Angular development server port
+EXPOSE 4200
+
+# Start the Angular development server
+CMD ["npm", "start", "--", "--host", "0.0.0.0"]

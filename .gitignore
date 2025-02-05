@@ -1,0 +1,36 @@
+myenv/
+
+## add pycache to gitignore
+__pycache__/
+*.pyc
+pgdata/
+
+# Fichiers Terraform générés automatiquement
+.terraform/
+.terraform.lock.hcl
+
+# Fichiers d'état Terraform (conservent des infos sensibles)
+#terraform.tfstate
+terraform.tfstate.backup
+*.tfstate
+*.tfstate.*
+
+# Plans Terraform (ne doivent pas être commités)
+*.tfplan
+
+# Fichiers de variables sensibles (évite de commit des secrets)
+terraform.tfvars
+*.tfvars
+
+# Logs et sorties Terraform
+crash.log
+*.log
+
+gitingest/
+
+*.DS_Store
+*.idea/
+edufinder/
+frontend/
+nginx/
+

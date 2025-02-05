@@ -1,0 +1,77 @@
+name: Deploy Django Backend
+
+on:
+  workflow_dispatch: 
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up AWS CLI
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.5.0
+
+      - name: Initialize Terraform
+        run: terraform init
+
+      - name: Apply Terraform (Provision ECR, ECS, RDS)
+        working-directory: terraform
+        env:
+          TF_VAR_email_host_user: ${{ secrets.EMAIL_HOST_USER }}
+          TF_VAR_email_host_password: ${{ secrets.EMAIL_HOST_PASSWORD }}
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+      - name: Get ECR Repository URL & Login to Amazon ECR
+        working-directory: terraform
+        run: |
+          # Get ECR URL without log interference
+          ECR_REPO=$(terraform output -raw ecr_repository_url 2>/dev/null | sed 's/^\[command\].*output -raw ecr_repository_url//g' | tr -d '\n' | tr -d '\r')
+          DATABASE_URL=$(terraform output -raw database_url 2>/dev/null | sed -E 's/^.*output -raw database_url:? ?//g' | tr -d '\n' | tr -d '\r')
+
+          # Debugging: Print DATABASE_URL before saving
+          echo "✅ Cleaned DATABASE_URL: '$DATABASE_URL'"
+
+          # Ensure DATABASE_URL is correctly formatted before saving it
+          if [[ "$DATABASE_URL" == postgresql://* ]]; then
+              echo "DATABASE_URL=$DATABASE_URL" >> $GITHUB_ENV
+          else
+              echo "❌ Error: Invalid DATABASE_URL extracted!"
+              exit 1
+          fi
+
+          # Check for command success and valid URL
+          if [ $? -ne 0 ]; then
+            echo "Error: Failed to get ECR repository URL from Terraform."
+            exit 1
+          fi
+          if [[ -z "$ECR_REPO" || ! "$ECR_REPO" =~ \.dkr\.ecr\..*\.amazonaws\.com ]]; then
+            echo "Error: Invalid ECR Repository URL: '$ECR_REPO'"
+            exit 1
+          fi
+          echo "ECR_REPOSITORY=$ECR_REPO" >> $GITHUB_ENV
+          echo "DATABASE_URL=$DATABASE_URL" >> $GITHUB_ENV
+          # Login to ECR
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin "$ECR_REPO"
+
+      - name: Build and Push Docker Image
+        run: |
+          cd edufinder
+          # Extract clean ECR repository URL
+          ECR_REPO_CLEAN=$(echo "${{ env.ECR_REPOSITORY }}" | awk -F'::' '{print $1}')
+          docker build -t "$ECR_REPO_CLEAN:latest" .
+          docker push "$ECR_REPO_CLEAN:latest"
+
